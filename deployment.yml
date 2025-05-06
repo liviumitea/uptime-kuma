@@ -4,19 +4,21 @@ kind: Namespace
 metadata:
   name: uptime-kuma
 ---
-# deployment-uptime-kuma.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: uptime-kuma
   namespace: uptime-kuma
-  labels:
-    app: uptime-kuma
 spec:
-  replicas: 1
   selector:
     matchLabels:
       app: uptime-kuma
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -24,34 +26,57 @@ spec:
     spec:
       containers:
       - name: uptime-kuma
-        image: louislam/uptime-kuma:latest
+        image: louislam/uptime-kuma:1
+        imagePullPolicy: IfNotPresent
+        env:
+        # only need to set PUID and PGUI because of NFS server
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
         ports:
-        - name: http
-          containerPort: 3001
-          protocol: TCP
+        - containerPort: 3001
+          name: web-ui
+        resources:
+          limits:
+            cpu: 200m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        livenessProbe:
+          tcpSocket:
+            port: web-ui
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            scheme: HTTP
+            path: /
+            port: web-ui
+          initialDelaySeconds: 30
+          periodSeconds: 10
         volumeMounts:
-        - name: data-volume
+        - name: data
           mountPath: /app/data
       volumes:
-      - name: data-volume
-        hostPath:
-          path: /data-nfs/data/uptime-kuma
-          type: DirectoryOrCreate
+      - name: data
+        persistentVolumeClaim:
+          claimName: uptime-kuma-pvc
 ---
 # service-uptime-kuma.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: uptime-kuma-service
+  name: uptime-kuma-tcp
   namespace: uptime-kuma
 spec:
   type: LoadBalancer
-  # Optional: pin to a specific IP if your environment supports it
   loadBalancerIP: 172.16.23.38
+  ports:
+  - name: web-ui
+    protocol: TCP
+    port: 3001
+    targetPort: 3001
   selector:
     app: uptime-kuma
-  ports:
-  - name: http
-    protocol: TCP
-    port: 80        # external port
-    targetPort: 3001  # container’s port
